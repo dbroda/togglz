@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import static org.togglz.core.util.FeatureStateStorageWrapper.featureStateForWrapper;
 
 public class ZookeeperStateRepository implements StateRepository, TreeCacheListener {
+
     private static final Logger log = LoggerFactory.getLogger(ZookeeperStateRepository.class);
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -44,7 +45,7 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
 
     private void initializeFeaturePath() {
         try {
-            curatorFramework.createContainers(featuresZnode);
+            tryCreateContainerOrZnode(featuresZnode);
         } catch (Exception e) {
             throw new RuntimeException("couldn't initialize the zookeeper state repository", e);
         }
@@ -62,7 +63,8 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
         log.info("Waiting for zookeeper state to be fully read");
         initializationLatch.await();
         long duration = System.nanoTime() - startTime;
-        log.debug("Initizlied the zookeeper state repository in {} ms", TimeUnit.NANOSECONDS.toMillis(duration));
+        log.debug("Initizlied the zookeeper state repository in {} ms",
+            TimeUnit.NANOSECONDS.toMillis(duration));
     }
 
     @Override
@@ -76,11 +78,12 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
 
     @Override
     public void setFeatureState(FeatureState featureState) {
-        FeatureStateStorageWrapper wrapper = FeatureStateStorageWrapper.wrapperForFeatureState(featureState);
+        FeatureStateStorageWrapper wrapper = FeatureStateStorageWrapper
+            .wrapperForFeatureState(featureState);
         try {
             String json = objectMapper.writeValueAsString(wrapper);
             String path = featuresZnode + "/" + featureState.getFeature().name();
-            curatorFramework.createContainers(path);
+            tryCreateContainerOrZnode(path);
             curatorFramework.setData().forPath(path, json.getBytes("UTF-8"));
             states.put(featureState.getFeature().name(), wrapper);
         } catch (Exception e) {
@@ -88,8 +91,21 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
         }
     }
 
+    private void tryCreateContainerOrZnode(String path) throws Exception {
+        try {
+            curatorFramework.createContainers(path);
+            return;
+        } catch (Exception ex) {
+            log.warn("couldn't create znode container - trying compatibility mode");
+        }
+
+        curatorFramework.create().orSetData().forPath(path);
+
+    }
+
     @Override
-    public void childEvent(CuratorFramework curatorFramework, TreeCacheEvent event) throws Exception {
+    public void childEvent(CuratorFramework curatorFramework, TreeCacheEvent event)
+        throws Exception {
         String featureName;
         ChildData eventData = event.getData();
         switch (event.getType()) {
@@ -102,7 +118,8 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
                         break;
                     }
                     if (eventData.getData().length > 0) {
-                        FeatureStateStorageWrapper featureState = objectMapper.readValue(eventData.getData(), FeatureStateStorageWrapper.class);
+                        FeatureStateStorageWrapper featureState = objectMapper
+                            .readValue(eventData.getData(), FeatureStateStorageWrapper.class);
                         states.put(featureName, featureState);
                     }
                 }
@@ -112,7 +129,8 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
                 String updatedPath = eventData.getPath();
                 if (pathHasAFeatureInIt(updatedPath)) {
                     featureName = getFeatureNameFromPath(updatedPath);
-                    FeatureStateStorageWrapper featureState = objectMapper.readValue(eventData.getData(), FeatureStateStorageWrapper.class);
+                    FeatureStateStorageWrapper featureState = objectMapper
+                        .readValue(eventData.getData(), FeatureStateStorageWrapper.class);
                     states.put(featureName, featureState);
                 }
                 break;
@@ -140,7 +158,6 @@ public class ZookeeperStateRepository implements StateRepository, TreeCacheListe
     private boolean pathHasAFeatureInIt(String updatedPath) {
         return updatedPath.length() > featuresZnode.length();
     }
-
 
 
     public static Builder newBuilder(CuratorFramework curatorFramework, String featuresZnode) {
